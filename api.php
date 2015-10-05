@@ -1,5 +1,6 @@
 <?php
 
+class CSAPIAuthenticationException extends \Exception{}
 
 class CSAPI{
     
@@ -7,32 +8,50 @@ class CSAPI{
     const BASE_URL = "https://hapi.couchsurfing.com";
     const LOGGING = false;
 
+
+    const CONVERSATION_FILTER_ALL = "";
+    const CONVERSATION_FILTER_REQUESTS = "visits";
+    const CONVERSATION_FILTER_MESSAGES = "private";
+    const CONVERSATION_FILTER_ARCHIVED = "archived";
+    
+
     protected $uid;
     protected $access_token;
     protected $curl;
 
     
 
-    function CSAPI($username = NULL, $password = NULL, $uid = NULL, $access_token = NULL) {
+    public function __construct() {
+        $this->initializeCurl();
+    }
 
-        $this->curl = curl_init();
-        curl_setopt($this->curl, CURLOPT_RETURNTRANSFER, true); 
-        curl_setopt($this->curl, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($this->curl, CURLOPT_SSL_VERIFYHOST, false);
+    public function __wakeup(){
+      $this->initializeCurl();  
+    }
+
+    protected function initializeCurl(){
+      $this->curl = curl_init();
+      curl_setopt($this->curl, CURLOPT_RETURNTRANSFER, true); 
+      curl_setopt($this->curl, CURLOPT_SSL_VERIFYPEER, false);
+      curl_setopt($this->curl, CURLOPT_SSL_VERIFYHOST, false);
+      //For debugging
         //curl_setopt($this->curl, CURLOPT_PROXY, "127.0.0.1"); 
-        //curl_setopt($this->curl, CURLOPT_PROXYPORT, 8888); 
-        //curl_setopt($this->curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1);
+        //curl_setopt($this->curl, CURLOPT_PROXYPORT, 8888);
+    }
 
+    public function loginWithCredentials($username, $password){
+      if ($this->authenticate($username, $password)){
+        return $this->getCurrentProfile();
+      }
 
-        if ($uid && $access_token){
-          $this->uid = $uid;
-          $this->access_token = $access_token;
-        }else{
-          assert($username && $password);
-          $this->login($username, $password);
+      throw new \CSAPIAuthenticationException("Authentification failed");
+    }
 
-        }
+    public function loginWithToken($access_token, $uid){
+      $this->uid = $uid;
+      $this->access_token = $access_token;
 
+      return $this->getCurrentProfile();
     }
 
     protected function getUrlSignature($key, $msg){
@@ -51,7 +70,7 @@ class CSAPI{
                 "Content-Type" => "application/json; charset=utf-8",
                 
       );
-      }
+    }
 
     protected function encodeHeaders($headers){
       $new_array = array();
@@ -74,7 +93,7 @@ class CSAPI{
       return $headers;
     }
 
-    function login($username, $password){
+    protected function authenticate($username, $password){
       $login_payload = json_encode(array(
                         "credentials" => array( "authToken"=> $password, "email"=> $username),
                         "actionType" => "manual_login",
@@ -86,7 +105,7 @@ class CSAPI{
         $session = $response->sessionUser;
         $this->uid = $session->id;
         $this->access_token = $session->accessToken;
-
+        return true;
         if (CSAPI::LOGGING){
           echo "Logged in with access_token: " . $this->access_token . " uid: " . $this->uid;
         }
@@ -95,9 +114,35 @@ class CSAPI{
       }
     }
 
-    function getConversations($since, $conversationsPerPage=20, $messagesPerConversation=1){
-      $url = "/api/v2/users/" . $this->uid . "/conversations/sync?&conversationsPerPage=" . $conversationsPerPage . "&since=". $since->format('Y-m-dTH:i:s') . "&messagesPerConversation=" . $messagesPerConversation;
+    function getConversationsUntil($until, $conversationsPerPage=20, $filter="", $messagesPerConversation=1){
+      $url = "/api/v2/users/" . $this->uid . "/conversations" . 
+       "?&until=". $until->format('Y-m-d\TH:i:s.000\Z') . 
+       "&conversationsPerPage=" . $conversationsPerPage .
+       "&messagesPerConversation=" . $messagesPerConversation . 
+       "&filter=" . $filter;
+      
+      $response = $this->getRequest($url);
+      return $response;
+    }
+
+    function getConversationsSince($since, $conversationsPerPage=20, $filter="", $messagesPerConversation=1){
+      $url = "/api/v2/users/" . $this->uid . "/conversations" . 
+       "?&since=". $since->format('Y-m-d\TH:i:s') . 
+       "&conversationsPerPage=" . $conversationsPerPage .
+       "&messagesPerConversation=" . $messagesPerConversation . 
+       "&filter=" . $filter;
+
       $response = $this->postRequest($url, "");
+      return $response;
+    }
+
+    function getCurrentProfile(){
+      return $this->getProfile($this->uid);
+    }
+
+    function getProfile($userId){
+      $url = "/api/v2/users/". $userId;
+      $response = $this->getRequest($url);
       return $response;
     }
 
@@ -114,6 +159,29 @@ class CSAPI{
       $response = curl_exec($this->curl);
 
       return json_decode($response);
+    }
+
+    function getRequest($url){
+      $signature = $this->getUrlSignature(CSAPI::PRIVATE_KEY . (($this->uid) ? "." . $this->uid : ""), $url);
+      $headers = $this->setupHeaderSignature($url, "", $signature);
+
+
+      
+      curl_setopt($this->curl, CURLOPT_URL, self::BASE_URL . $url);
+      curl_setopt($this->curl, CURLOPT_HTTPGET, 1);
+      curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, "GET");                                                                      
+      curl_setopt($this->curl, CURLOPT_HTTPHEADER, $this->encodeHeaders($headers));                      
+      $response = curl_exec($this->curl);
+      
+      return json_decode($response);
+    }
+
+    public function getAccessToken(){
+      return $this->access_token;
+    }
+
+    public function getUID(){
+      return $this->uid;
     }
 
 }
